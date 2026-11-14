@@ -98,11 +98,30 @@ public class Questions {
       m.put("correctIndex", r.getInt("correct_index"));
       m.put("explanation", r.getString("explanation"));
     }
+    if (view.equals("manage")) {
+      m.put("jobId", r.getString("job_id"));
+      m.put("promptVersion", r.getString("prompt_version"));
+      m.put(
+          "review",
+          r.getObject("review_usable") == null
+              ? null
+              : fields(
+                  "usable",
+                  r.getBoolean("review_usable"),
+                  "tagCorrect",
+                  r.getBoolean("review_tag_correct"),
+                  "issueType",
+                  r.getString("review_issue_type"),
+                  "memo",
+                  r.getString("review_memo"),
+                  "updatedAt",
+                  r.getString("review_updated_at")));
+    }
     return m;
   }
 
   private static final String SELECT =
-      "SELECT q.*,d.name AS document_name FROM questions q LEFT JOIN documents d ON d.id=q.document_id WHERE q.learner_id=? AND q.deleted=FALSE";
+      "SELECT q.*,d.name AS document_name,r.usable AS review_usable,r.tag_correct AS review_tag_correct,r.issue_type AS review_issue_type,r.memo AS review_memo,r.updated_at AS review_updated_at FROM questions q LEFT JOIN documents d ON d.id=q.document_id LEFT JOIN question_reviews r ON r.question_id=q.id AND r.question_version=q.version WHERE q.learner_id=? AND q.deleted=FALSE";
 
   List<Map<String, Object>> list(String learner, String view, String tag) {
     validateView(view, false);
@@ -139,6 +158,7 @@ public class Questions {
           if (!q.get("version").equals(request.version()))
             throw ApiException.conflict("문제가 변경되었습니다. 새로고침해 주세요.");
           db.update("DELETE FROM attempts WHERE question_id=?", id);
+          db.update("DELETE FROM question_reviews WHERE question_id=?", id);
           db.update(
               "UPDATE questions SET text=?,options=?,correct_index=?,tag_id=?,difficulty=?,explanation=?,version=version+1,box=0,due_date=NULL,latest_correct=NULL WHERE id=?",
               request.text().strip(),
@@ -300,9 +320,16 @@ public class Questions {
     return total == 0 ? 0 : Math.round(10000.0 * correct / total) / 100.0;
   }
 
-  void insert(String learner, String job, String document, int chunk, Mode mode, Generated q) {
+  void insert(
+      String learner,
+      String job,
+      String document,
+      int chunk,
+      Mode mode,
+      Generated q,
+      String promptVersion) {
     db.update(
-        "INSERT INTO questions(id,learner_id,job_id,chunk_index,document_id,text,options,correct_index,tag_id,difficulty,explanation,source_start_page,source_end_page,mode) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO questions(id,learner_id,job_id,chunk_index,document_id,text,options,correct_index,tag_id,difficulty,explanation,source_start_page,source_end_page,mode,prompt_version) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         UUID.randomUUID().toString(),
         learner,
         job,
@@ -316,6 +343,7 @@ public class Questions {
         q.explanation(),
         q.sourceStartPage(),
         q.sourceEndPage(),
-        mode.name());
+        mode.name(),
+        promptVersion);
   }
 }

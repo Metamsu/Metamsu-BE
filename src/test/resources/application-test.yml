@@ -8,3 +8,4 @@ recall:
   api-key: test-placeholder-not-a-real-key
   provider-timeout-seconds: 1
   retry-delay-ms: 0
+  prompt-version: v1

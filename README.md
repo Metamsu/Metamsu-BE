@@ -1,5 +1,7 @@
 # ReCall backend
 
+한국어 종합 사용법(실행, LIVE 설정, 품질 평가, 평가 스크립트, 테스트)은 [USAGE.md](USAGE.md)를 보세요.
+
 Java 21, Spring Boot **3.5.16**, JDBC, Flyway, PDFBox **3.0.8**. This is a single-instance, anonymous **local-development MVP**, not a production authentication system. No live AI requests happen unless explicitly enabled and a key is configured.
 
 ## Run and test
@@ -26,7 +28,7 @@ DB_PASSWORD=your-test-password \
 ./mvnw -Ppgtest verify
 ```
 
-The `pgtest` Maven profile activates Spring test profiles `test,pgtest`: the latter overrides the datasource using the required `DB_URL`, `DB_USERNAME`, and `DB_PASSWORD` environment variables and explicitly requires the PostgreSQL driver. The equivalent CI command `./mvnw test -Dspring.profiles.active=pgtest` is also supported by the test profile resolver. Neither option can silently substitute H2. The provider stays mocked, so this suite never makes live AI requests. Those tests add records; never point them at a real learner database. PostgreSQL execution is unverified in the local environment because PostgreSQL/Docker are unavailable; use a PostgreSQL CI service for this profile.
+The `pgtest` Maven profile activates Spring test profiles `test,pgtest`: the latter overrides the datasource using the required `DB_URL`, `DB_USERNAME`, and `DB_PASSWORD` environment variables and explicitly requires the PostgreSQL driver. The equivalent CI command `./mvnw test -Dspring.profiles.active=pgtest` is also supported by the test profile resolver. Neither option can silently substitute H2. The provider stays mocked, so this suite never makes live AI requests. Those tests add records; never point them at a real learner database. The full suite (including `QualityEvalTest` and the V2/V3 migrations) has been run this way against a local PostgreSQL 17; use a PostgreSQL CI service to keep it verified.
 
 ## Environment
 
@@ -44,6 +46,10 @@ The `pgtest` Maven profile activates Spring test profiles `test,pgtest`: the lat
 | `PROVIDER_TIMEOUT_SECONDS` | `45` | Complete response deadline, clamped to 1–120 seconds |
 | `PROVIDER_RETRY_DELAY_MS` | `500` | Retry base delay, clamped to 0–5000 ms; at most 3 total attempts |
 | `COURSE_NAME` | `운영체제 (임시 개념 태그)` | Display name; all ten concept tags are provisional |
+| `PROMPT_VERSION` | `v2` | Generation prompt: `v1` (original baseline) or `v2` (quality prompt); anything else fails startup |
+| `STRUCTURED_OUTPUTS` | `true` | v2 only: send the JSON schema as `output_config.format`; `false` puts the schema in the prompt instead |
+| `TARGET_USABLE_RATE` | `60` | Review summary target, percent of reviewed questions marked usable |
+| `TARGET_TAG_RATE` | `80` | Review summary target, percent of reviewed questions with a correct tag |
 | `JAVA_HOME` | detected Java | Optional Java 21 installation |
 | `MAVEN_USER_HOME` | `.cache/maven-user` | Optional wrapper distribution cache override |
 
@@ -58,7 +64,7 @@ Call `POST /api/learners` first: **201 `{token}`**. Store this opaque bearer cap
 | Endpoint | Result / request |
 |---|---|
 | `GET /actuator/health` | Public `{status:"UP"}` |
-| `GET /api/config` | `{liveEnabled,courseName,timezone:"Asia/Seoul"}` |
+| `GET /api/config` | `{liveEnabled,courseName,timezone:"Asia/Seoul",promptVersion}` |
 | `GET /api/tags` | `[{id,name}]` |
 | `GET /api/dashboard` | `{dueCount,questionCount,attemptCount,accuracy,concepts:[{tagId,tagName,attemptCount,correctCount,accuracy,unresolvedWrongCount}]}` |
 | `POST /api/documents` | Multipart field `file`; **201** `{id,name,pageCount,createdAt}` |
@@ -70,13 +76,17 @@ Call `POST /api/learners` first: **201 `{token}`**. Store this opaque bearer cap
 | `GET /api/questions/{id}?view=quiz\|manage` | One question; default `manage` |
 | `PUT /api/questions/{id}` | `{text,options,correctIndex,tagId,difficulty,explanation,version}` → updated question |
 | `DELETE /api/questions/{id}` | **204**, soft-deleted and excluded from current questions/stats/review |
+| `PUT /api/questions/{id}/review` | `{usable,tagCorrect,issueType,memo,version}` → updated question (manage view); replaces any earlier review |
+| `DELETE /api/questions/{id}/review` | **204**, removes the review |
+| `GET /api/reviews/summary?jobId=...&promptVersion=...` | Review totals for the learner's current questions; both filters optional |
+| `GET /api/reviews/export.csv` | UTF-8 CSV (with BOM) of every current question and its review |
 | `POST /api/attempts` | `{questionId,selectedIndex,idempotencyKey,version}` → **200** `{id,questionId,selectedIndex,correct,correctIndex,explanation,box,dueDate}` |
 
-Question fields: `{id,text,options,tagId,difficulty,sourceStartPage,sourceEndPage,documentName,mode,version,box,dueDate,latestCorrect}`. `manage` and `mistakes` additionally include `correctIndex` and `explanation`; **quiz/due never include either**. Indices must be JSON integers 0–3, options exactly four unique nonblank strings, and difficulty `EASY|MEDIUM|HARD`. Text limit 4000 chars, each option 1000, explanation 6000. `idempotencyKey` must be a canonical lowercase UUID string. All IDs are UUIDs except concept tags:
+Question fields: `{id,text,options,tagId,difficulty,sourceStartPage,sourceEndPage,documentName,mode,version,box,dueDate,latestCorrect}`. `manage` and `mistakes` additionally include `correctIndex` and `explanation`; **quiz/due never include either**. `manage` also includes `jobId`, `promptVersion` (null for DEMO) and `review` (`{usable,tagCorrect,issueType,memo,updatedAt}` or null). Indices must be JSON integers 0–3, options exactly four unique nonblank strings, and difficulty `EASY|MEDIUM|HARD`. Text limit 4000 chars, each option 1000, explanation 6000. `idempotencyKey` must be a canonical lowercase UUID string. All IDs are UUIDs except concept tags:
 
 `os-basics`, `process`, `thread`, `scheduling`, `synchronization`, `deadlock`, `memory`, `virtual-memory`, `filesystem`, `io`.
 
-Job fields: `{id,documentId,mode,status,totalChunks,completedChunks,failedChunks,questionCount,error,createdAt,chunks}`. Status is `queued|running|succeeded|partial|failed`. Each chunk has `{index,status,error,attempts,durationMs,inputTokens,outputTokens,parseAttempts,parseSuccess}`. Chunk indices are zero-based; PDF page numbers are one-based. Durations include retry delays; tokens accumulate across successful and schema-invalid provider responses. HTTP failures without usage metadata report zero tokens. Parsing success is separate from atomic storage success. A queued job may already be running/completed by the time the creation response is returned.
+Job fields: `{id,documentId,mode,status,totalChunks,completedChunks,failedChunks,questionCount,error,createdAt,promptVersion,chunks}`. `promptVersion` is fixed when a LIVE job is created and is null for DEMO. Status is `queued|running|succeeded|partial|failed`. Each chunk has `{index,status,error,attempts,durationMs,inputTokens,outputTokens,parseAttempts,parseSuccess}`. Chunk indices are zero-based; PDF page numbers are one-based. Durations include retry delays; tokens accumulate across successful and schema-invalid provider responses. HTTP failures without usage metadata report zero tokens. Parsing success is separate from atomic storage success. A queued job may already be running/completed by the time the creation response is returned.
 
 ## Semantics and limits
 
@@ -94,6 +104,42 @@ Job fields: `{id,documentId,mode,status,totalChunks,completedChunks,failedChunks
 - **Editing increments version and permanently removes that question's attempts/idempotency records and review progress** (box 0, no due date, no latest result). Old quiz versions cannot be answered. Deletion makes a question inaccessible, including replay of old submissions, and excludes its historical attempts from current dashboard counts.
 - Mistakes means **latest** answer wrong, not “ever wrong.” Accuracy is 0–100, rounded to two decimals, and zero for no attempts. Deleted questions and reset histories do not contribute.
 
+## Prompt versions (v1 baseline, v2 quality prompt)
+
+The prompt is chosen by `PROMPT_VERSION` and recorded on each LIVE job and on every question it creates, so results from the two versions can be compared.
+
+- **v1** is the original behavior, unchanged: six-line system prompt, schema inside the prompt, at least one question per chunk, and one invalid question fails the whole chunk. Use it to measure the baseline.
+- **v2** (default) loads its system prompt from `src/main/resources/prompts/question-gen-v2.txt`. It keeps the untrusted-data and provenance rules and adds question-quality criteria, difficulty definitions and examples.
+  - The JSON schema goes in `output_config.format` (structured outputs). The same schema is sent for every chunk. Constraints that API does not accept (string lengths, exactly four options, page membership, the per-request limit) are stated in the prompt and enforced by the server-side parser.
+  - A chunk may yield **zero questions** (cover page, table of contents); that is a successful chunk, not a retry.
+  - A question that fails validation is dropped and the valid ones are kept. Only an answer whose questions are all invalid is retried.
+  - Questions already accepted in the same job are passed to later chunks as data, and a question whose normalized text repeats an earlier one is dropped.
+  - Thinking blocks beside the text block are ignored when reading the answer. Running a model that thinks by default is otherwise untested (`max_tokens` stays 4096 and `stop_reason` must be `end_turn`).
+- `STRUCTURED_OUTPUTS=false` keeps the v2 prompt but puts the schema back in the prompt, for a model or gateway that rejects `output_config`.
+
+The v2 request shape is covered by mock-server tests only. **It has not been sent to the real API**, and no quality difference between v1 and v2 has been measured.
+
+## Question reviews
+
+`PUT /api/questions/{id}/review` stores one review per question: `usable` and `tagCorrect` (required booleans), optional `issueType` (`WRONG_ANSWER`, `AMBIGUOUS`, `OFF_TOPIC`, `TOO_EASY`, `DUPLICATE`, `OTHER`; only allowed when `usable` is false), optional `memo` (≤2000 chars) and the question `version` (stale → 409). Saving again overwrites. Editing a question deletes its review, because the judgement was about the old content. Deleted questions leave the totals.
+
+`GET /api/reviews/summary` returns `{questionCount,reviewedCount,usableCount,usableRate,tagCorrectCount,tagCorrectRate,issues,byTag,byDifficulty,targetUsableRate,targetTagCorrectRate,usableTargetMet,tagTargetMet}`. Rates are percentages of **reviewed** questions; the two `...TargetMet` values are null until something is reviewed. All review endpoints are limited to the calling learner. CSV cells that start with `=`, `+`, `-` or `@` are prefixed with `'` so spreadsheets do not run them as formulas.
+
+## Evaluation script
+
+`scripts/live_eval.py` (Python 3, standard library only) runs generation through the HTTP API and writes files for human review. It never reads the API key; the backend holds it.
+
+```sh
+python scripts/live_eval.py --dry-run --out eval-out                 # no server: sample data, checks the output format
+python scripts/live_eval.py --demo --out eval-out                    # real server, DEMO job, no provider request
+python scripts/live_eval.py --pdf lecture1.pdf lecture2.pdf --out eval-out   # LIVE: paid provider requests
+python -m unittest discover -s scripts -p "test_*.py"               # format tests
+```
+
+Per run it writes `<name>.<promptVersion>.md` (question, four options, marked answer, tag, difficulty, explanation, source pages), a matching `.csv` with empty `usable(Y/N)`, `tag_correct(Y/N)` and `memo` columns, and `summary.md`. The summary lists, per run: chunks succeeded/failed, failure reasons, question count, duration, input/output tokens, retries, parse success rate and prompt version, plus checks that need no reviewer (answer-position distribution, how often the correct option is the longest, near-duplicate pairs). Runs accumulate in `runs.json`, so the same PDF under v1 and v2 appears side by side. If the server reports LIVE disabled, the script prints the variables to set and exits with status 2.
+
+To compare prompts: start the backend with `PROMPT_VERSION=v1`, run the PDFs, restart with `PROMPT_VERSION=v2`, run the same PDFs into the same `--out` folder. Output folders hold text derived from lecture material; `eval-out/` is git-ignored.
+
 ## Verification coverage
 
-Integration tests use real Spring MVC/JDBC/Flyway with H2 PostgreSQL mode and mock HTTP only. They cover learner isolation, capability hashing, public health/config, demo separation, strict input/schema checks, malformed/encrypted/scanned/oversized PDFs, provenance, retries/partial failure, metrics, bounded upstream responses/timeouts, quota/idempotent chunk writes, restart recovery, queue overload, concurrent attempts, edit/delete reset behavior, overdue inclusion, and Seoul midnight. Unit tests cover every Leitner transition/cap and long-page chunk splitting. Provider timing/token assertions use synthetic mock responses; no measured live latency, accuracy, or cost is claimed.
+Integration tests use real Spring MVC/JDBC/Flyway with H2 PostgreSQL mode and mock HTTP only. They cover learner isolation, capability hashing, public health/config, demo separation, strict input/schema checks, malformed/encrypted/scanned/oversized PDFs, provenance, retries/partial failure, metrics, bounded upstream responses/timeouts, quota/idempotent chunk writes, restart recovery, queue overload, concurrent attempts, edit/delete reset behavior, overdue inclusion, and Seoul midnight. `QualityEvalTest` runs the application with `PROMPT_VERSION=v2` and covers the structured-output request shape, the schema-in-prompt fallback, zero-question chunks, dropping invalid questions, cross-chunk de-duplication, thinking blocks, and review save/overwrite/validation/isolation/summary/CSV. The original suite is pinned to v1 and unchanged. Unit tests cover every Leitner transition/cap and long-page chunk splitting. Provider timing/token assertions use synthetic mock responses; no measured live latency, accuracy, or cost is claimed.

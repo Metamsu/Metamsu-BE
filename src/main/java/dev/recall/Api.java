@@ -6,6 +6,7 @@ import jakarta.validation.Valid;
 import java.util.Map;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -17,6 +18,7 @@ public class Api {
   final Documents documents;
   final Jobs jobs;
   final Provider provider;
+  final Reviews reviews;
   final String course;
 
   Api(
@@ -25,12 +27,14 @@ public class Api {
       Documents documents,
       Jobs jobs,
       Provider provider,
+      Reviews reviews,
       @Value("${recall.course-name}") String course) {
     this.learners = learners;
     this.questions = questions;
     this.documents = documents;
     this.jobs = jobs;
     this.provider = provider;
+    this.reviews = reviews;
     this.course = course;
   }
 
@@ -43,7 +47,14 @@ public class Api {
   @GetMapping("/config")
   Object config() {
     return Map.of(
-        "liveEnabled", provider.liveEnabled(), "courseName", course, "timezone", "Asia/Seoul");
+        "liveEnabled",
+        provider.liveEnabled(),
+        "courseName",
+        course,
+        "timezone",
+        "Asia/Seoul",
+        "promptVersion",
+        provider.promptVersion());
   }
 
   @GetMapping("/tags")
@@ -113,6 +124,36 @@ public class Api {
   @ResponseStatus(HttpStatus.NO_CONTENT)
   void delete(@RequestAttribute("learner") String learner, @PathVariable String id) {
     questions.delete(learner, id);
+  }
+
+  @PutMapping("/questions/{id}/review")
+  Object review(
+      @RequestAttribute("learner") String learner,
+      @PathVariable String id,
+      @Valid @RequestBody ReviewRequest request) {
+    return reviews.save(learner, id, request);
+  }
+
+  @DeleteMapping("/questions/{id}/review")
+  @ResponseStatus(HttpStatus.NO_CONTENT)
+  void deleteReview(@RequestAttribute("learner") String learner, @PathVariable String id) {
+    reviews.delete(learner, id);
+  }
+
+  @GetMapping("/reviews/summary")
+  Object reviewSummary(
+      @RequestAttribute("learner") String learner,
+      @RequestParam(required = false) String jobId,
+      @RequestParam(required = false) String promptVersion) {
+    return reviews.summary(learner, jobId, promptVersion);
+  }
+
+  @GetMapping("/reviews/export.csv")
+  ResponseEntity<byte[]> reviewExport(@RequestAttribute("learner") String learner) {
+    return ResponseEntity.ok()
+        .header("Content-Type", "text/csv; charset=UTF-8")
+        .header("Content-Disposition", "attachment; filename=\"recall-reviews.csv\"")
+        .body(reviews.csv(learner));
   }
 
   @PostMapping("/attempts")
