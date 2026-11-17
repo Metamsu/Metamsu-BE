@@ -42,5 +42,6 @@ recall:
   course-name: ${COURSE_NAME:운영체제 (임시 개념 태그)}
   prompt-version: ${PROMPT_VERSION:v2}
   structured-outputs: ${STRUCTURED_OUTPUTS:true}
+  disable-thinking: ${DISABLE_THINKING:false}
   target-usable-rate: ${TARGET_USABLE_RATE:60}
   target-tag-rate: ${TARGET_TAG_RATE:80}

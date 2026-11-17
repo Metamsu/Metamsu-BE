@@ -81,6 +81,9 @@ $env:CLAUDE_API_KEY="<본인 키>"
 | `PROMPT_VERSION` | `v2` | `v1`은 원래 프롬프트(기준선), `v2`는 품질 개선 프롬프트 |
 | `STRUCTURED_OUTPUTS` | `true` | v2에서 JSON 스키마를 API의 구조화 출력으로 보냅니다. `false`면 프롬프트에 넣습니다 |
 | `TARGET_USABLE_RATE` / `TARGET_TAG_RATE` | `60` / `80` | 품질 평가 요약의 목표 비율(%) |
+| `ANTHROPIC_BASE_URL` | `https://api.anthropic.com` | 요청을 보낼 주소. 로컬 모델을 쓸 때 바꿉니다 |
+| `PROVIDER_TIMEOUT_SECONDS` | `45` | 청크 하나의 응답 제한 시간(1~1800초) |
+| `DISABLE_THINKING` | `false` | 모델의 생각 단계를 끕니다. Ollama에서 필요합니다 |
 
 ### v1과 v2의 차이
 
@@ -93,6 +96,35 @@ $env:CLAUDE_API_KEY="<본인 키>"
 | 청크 간 중복 | 검사 없음 | 이미 낸 문항을 알려 주고 서버에서도 제거 |
 
 v2 요청 형식은 모의 서버로만 검증했습니다. 실제 API에서 요청이 거부되면 `STRUCTURED_OUTPUTS=false`로 실행하세요.
+
+### 무료 대안: Ollama로 로컬 오픈소스 모델 쓰기
+
+[Ollama](https://ollama.com)는 Claude와 같은 형식의 API를 제공하므로, 키와 비용 없이 내 PC의 모델로 LIVE 생성을 돌릴 수 있습니다.
+
+1. 모델을 받고, 문맥 길이를 늘린 사본을 만듭니다. 기본 문맥 길이(4096)로는 12,000자 청크가 잘립니다.
+
+   ```powershell
+   ollama pull qwen3.5:9b
+   Set-Content Modelfile "FROM qwen3.5:9b`nPARAMETER num_ctx 16384`nPARAMETER temperature 0.3"
+   ollama create recall-qwen -f Modelfile
+   ```
+
+2. 아래 환경변수로 백엔드를 띄웁니다. `CLAUDE_API_KEY`는 비어 있지만 않으면 됩니다.
+
+   ```powershell
+   $env:LIVE_ENABLED="true"
+   $env:ANTHROPIC_BASE_URL="http://localhost:11434"
+   $env:CLAUDE_API_KEY="ollama"
+   $env:CLAUDE_MODEL="recall-qwen"
+   $env:STRUCTURED_OUTPUTS="false"
+   $env:DISABLE_THINKING="true"
+   $env:PROVIDER_TIMEOUT_SECONDS="1800"
+   .\mvnw.cmd spring-boot:run "-Dspring-boot.run.profiles=dev"
+   ```
+
+- 2쪽짜리 짧은 PDF로 3문항 생성까지 확인했습니다(그래픽카드 없는 노트북 CPU에서 약 4분 40초).
+- 속도는 PC 사양에 달려 있습니다. 그래픽카드가 없으면 12,000자를 꽉 채운 청크는 20분 이상 걸릴 수 있고, 1800초를 넘기면 `PROVIDER_TIMEOUT`으로 실패합니다.
+- 문항 품질은 Claude보다 낮을 수 있습니다. 5장의 품질 평가로 직접 확인하세요.
 
 ## 5. 문항 품질 평가
 

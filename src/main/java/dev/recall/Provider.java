@@ -24,6 +24,12 @@ public class Provider {
   private final String key, model, baseUrl, promptVersion, promptV2;
   private final boolean enabled, structured;
   private final int timeout;
+
+  // Local runtimes (e.g. Ollama) think by default, which spends the whole token budget on a
+  // small CPU model. Off unless asked: the hosted API does not think without the field anyway.
+  @Value("${recall.disable-thinking:false}")
+  private boolean disableThinking;
+
   private final Json json;
   private final Questions questions;
   private final HttpClient client;
@@ -68,12 +74,12 @@ public class Provider {
     this.model = model;
     this.baseUrl = baseUrl.replaceAll("/+$", "");
     this.enabled = enabled;
-    this.timeout = Math.max(1, Math.min(120, timeout));
+    this.timeout = Math.max(1, Math.min(1800, timeout));
     this.json = json;
     this.questions = questions;
     client =
         HttpClient.newBuilder()
-            .connectTimeout(Duration.ofSeconds(this.timeout))
+            .connectTimeout(Duration.ofSeconds(Math.min(30, this.timeout)))
             .followRedirects(HttpClient.Redirect.NEVER)
             .build();
   }
@@ -211,7 +217,9 @@ public class Provider {
     if (!slots.tryAcquire()) throw new Failure("PROVIDER_BUSY", true, 0, 0);
     try {
       boolean v2 = V2.equals(version);
-      var body = v2 ? bodyV2(chunk, limit, asked) : bodyV1(chunk, limit);
+      Map<String, Object> body =
+          new LinkedHashMap<>(v2 ? bodyV2(chunk, limit, asked) : bodyV1(chunk, limit));
+      if (disableThinking) body.put("thinking", Map.of("type", "disabled"));
       HttpRequest request =
           HttpRequest.newBuilder(URI.create(baseUrl + "/v1/messages"))
               .timeout(Duration.ofSeconds(timeout))

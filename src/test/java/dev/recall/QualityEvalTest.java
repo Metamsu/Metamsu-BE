@@ -241,6 +241,32 @@ class QualityEvalTest {
   }
 
   @Test
+  void thinkingIsDisabledOnlyWhenConfiguredForLocalModels() {
+    Chunk chunk = new Chunk(0, 1, 1, "[PAGE 1] data", Set.of(1));
+    Provider local =
+        new Provider(
+            "test-placeholder-not-a-real-key",
+            "model",
+            "http://127.0.0.1:" + server.getAddress().getPort(),
+            true,
+            1,
+            "v2",
+            false,
+            json,
+            questions);
+    try {
+      local.generate(chunk, 3);
+      assertThat(json.read(requests.getFirst()).has("thinking")).isFalse();
+      org.springframework.test.util.ReflectionTestUtils.setField(local, "disableThinking", true);
+      assertThat(local.generate(chunk, 3).questions()).hasSize(1);
+      assertThat(json.read(requests.getLast()).get("thinking").get("type").asText())
+          .isEqualTo("disabled");
+    } finally {
+      local.close();
+    }
+  }
+
+  @Test
   void emptyAnswerIsASuccessfulChunkWithoutRetry() throws Exception {
     handler.set(request -> envelope("{\"questions\":[]}"));
     var job = live(seededDocument(1));

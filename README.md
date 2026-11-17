@@ -43,7 +43,8 @@ The `pgtest` Maven profile activates Spring test profiles `test,pgtest`: the lat
 | `CLAUDE_API_KEY` | empty | Claude key; never returned or persisted |
 | `CLAUDE_MODEL` | `claude-haiku-4-5-20251001` | Override with a model available to your account |
 | `ANTHROPIC_BASE_URL` | `https://api.anthropic.com` | Base URL; `/v1/messages` appended |
-| `PROVIDER_TIMEOUT_SECONDS` | `45` | Complete response deadline, clamped to 1–120 seconds |
+| `PROVIDER_TIMEOUT_SECONDS` | `45` | Complete response deadline, clamped to 1–1800 seconds (raise it for a local model) |
+| `DISABLE_THINKING` | `false` | Send `thinking: {type: disabled}`; needed for local runtimes such as Ollama that think by default |
 | `PROVIDER_RETRY_DELAY_MS` | `500` | Retry base delay, clamped to 0–5000 ms; at most 3 total attempts |
 | `COURSE_NAME` | `운영체제 (임시 개념 태그)` | Display name; all ten concept tags are provisional |
 | `PROMPT_VERSION` | `v2` | Generation prompt: `v1` (original baseline) or `v2` (quality prompt); anything else fails startup |
