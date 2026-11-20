@@ -35,6 +35,22 @@ public final class Models {
       @NotBlank String idempotencyKey,
       @NotNull @Min(1) Integer version) {}
 
+  public enum IssueType {
+    WRONG_ANSWER,
+    AMBIGUOUS,
+    OFF_TOPIC,
+    TOO_EASY,
+    DUPLICATE,
+    OTHER
+  }
+
+  public record ReviewRequest(
+      @NotNull Boolean usable,
+      @NotNull Boolean tagCorrect,
+      IssueType issueType,
+      @Size(max = 2000) String memo,
+      @NotNull @Min(1) Integer version) {}
+
   public record Generated(
       String text,
       List<String> options,

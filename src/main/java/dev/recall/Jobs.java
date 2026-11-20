@@ -81,16 +81,19 @@ public class Jobs {
     if (request.mode() == Mode.LIVE && !provider.liveEnabled())
       throw new ApiException(503, "LIVE_DISABLED", "실시간 생성이 비활성화되어 있습니다.");
     String id = UUID.randomUUID().toString();
+    // Fixed at creation so a job reports the prompt it ran with even if it yields no questions.
+    String version = request.mode() == Mode.LIVE ? provider.promptVersion() : null;
     tx.executeWithoutResult(
         status -> {
           db.update(
-              "INSERT INTO jobs(id,learner_id,document_id,mode,status,total_chunks,created_at) VALUES (?,?,?,?,'queued',?,?)",
+              "INSERT INTO jobs(id,learner_id,document_id,mode,status,total_chunks,created_at,prompt_version) VALUES (?,?,?,?,'queued',?,?,?)",
               id,
               learner,
               request.documentId(),
               request.mode().name(),
               chunks.size(),
-              Instant.now(clock).toString());
+              Instant.now(clock).toString(),
+              version);
           for (var chunk : chunks)
             db.update(
                 "INSERT INTO job_chunks(job_id,chunk_index,status) VALUES (?,?,'queued')",
@@ -98,7 +101,7 @@ public class Jobs {
                 chunk.index());
         });
     try {
-      executor.execute(() -> run(id, learner, request, chunks));
+      executor.execute(() -> run(id, learner, request, chunks, version));
     } catch (RejectedExecutionException e) {
       failPending(id, "OVERLOADED");
       throw new ApiException(503, "OVERLOADED", "생성 대기열이 가득 찼습니다. 잠시 후 다시 시도하세요. 작업 ID: " + id);
@@ -106,18 +109,19 @@ public class Jobs {
     return get(learner, id);
   }
 
-  void run(String id, String learner, JobRequest request, List<Chunk> chunks) {
+  void run(String id, String learner, JobRequest request, List<Chunk> chunks, String version) {
     if (db.update("UPDATE jobs SET status='running' WHERE id=? AND status='queued'", id) != 1)
       return;
     try {
       int count = 0;
+      List<String> asked = new ArrayList<>();
       for (var chunk : chunks) {
         if (Thread.currentThread().isInterrupted()) {
           failPending(id, "INTERRUPTED");
           return;
         }
         if (count >= 30) {
-          success(id, learner, request, chunk, List.of());
+          success(id, learner, request, chunk, List.of(), version);
           continue;
         }
         long started = System.nanoTime();
@@ -136,7 +140,7 @@ public class Jobs {
             Provider.Result result =
                 request.mode() == Mode.DEMO
                     ? new Provider.Result(samples(), 0, 0)
-                    : provider.generate(chunk, Math.min(3, 30 - count));
+                    : provider.generate(chunk, Math.min(3, 30 - count), version, asked);
             metrics(
                 id,
                 chunk,
@@ -145,8 +149,9 @@ public class Jobs {
                 result.outputTokens(),
                 request.mode() == Mode.LIVE,
                 true);
-            success(id, learner, request, chunk, result.questions());
+            success(id, learner, request, chunk, result.questions(), version);
             count += result.questions().size();
+            for (var q : result.questions()) asked.add(q.text());
             succeeded = true;
             break;
           } catch (Provider.Failure e) {
@@ -211,6 +216,16 @@ public class Jobs {
 
   void success(
       String job, String learner, JobRequest request, Chunk chunk, List<Generated> generated) {
+    success(job, learner, request, chunk, generated, null);
+  }
+
+  void success(
+      String job,
+      String learner,
+      JobRequest request,
+      Chunk chunk,
+      List<Generated> generated,
+      String version) {
     if (generated.size() > 3) throw new IllegalStateException("Chunk quota");
     tx.executeWithoutResult(
         status -> {
@@ -226,7 +241,8 @@ public class Jobs {
           if (state.equals("succeeded")) return;
           if (count + generated.size() > 30) throw new IllegalStateException("Job quota");
           for (var q : generated)
-            questions.insert(learner, job, request.documentId(), chunk.index(), request.mode(), q);
+            questions.insert(
+                learner, job, request.documentId(), chunk.index(), request.mode(), q, version);
           db.update(
               "UPDATE job_chunks SET status='succeeded',error=NULL WHERE job_id=? AND chunk_index=?",
               job,
@@ -289,7 +305,9 @@ public class Jobs {
                     "error",
                     r.getString("error"),
                     "createdAt",
-                    r.getString("created_at")),
+                    r.getString("created_at"),
+                    "promptVersion",
+                    r.getString("prompt_version")),
             learner,
             id);
     if (rows.isEmpty()) throw ApiException.missing();
